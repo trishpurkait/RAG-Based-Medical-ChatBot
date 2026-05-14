@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MediQuery — AI Medical Assistant</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+</head>
+<body>
+
+<!-- ══ SIDEBAR ══ -->
+<aside class="sidebar">
+
+  <div class="logo">
+    <div class="logo-icon">🩺</div>
+    <div class="logo-name">
+      MediQuery
+      <span>RAG Medical AI</span>
+    </div>
+  </div>
+
+
+  <div class="stack-info">
+    <strong>⚙ Tech Stack</strong>
+    🔎 Pinecone Vector DB<br/>
+    🤖 LLaMA 3.1 70B (NVIDIA NIM)<br/>
+    🧬 MiniLM-L6 Embeddings<br/>
+    🐍 Flask + LangChain
+  </div>
+
+  <div class="disclaimer">
+    <strong>⚠ Medical Disclaimer</strong>
+    For informational purposes only. Always consult a qualified healthcare professional for diagnosis and treatment.
+  </div>
+
+</aside>
+
+<!-- ══ MAIN ══ -->
+<main class="main">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-title">Ask <em>anything</em> about your health</div>
+    <div class="badge-row">
+      <span class="badge badge-pinecone">🔎 Pinecone RAG</span>
+      <span class="badge badge-nim"><span class="live-dot"></span>NIM Online</span>
+    </div>
+  </div>
+
+  <!-- MESSAGES -->
+  <div class="messages-area" id="messagesArea">
+    <div class="welcome" id="welcomeScreen">
+      <div class="welcome-icon">🩺</div>
+      <h1>Your AI Medical Assistant</h1>
+      <p>Powered by Pinecone RAG + LLaMA 3.1 70B. Ask about symptoms, medications, conditions, or treatments.</p>
+      <div class="suggestion-grid">
+        <button class="suggestion-card" onclick="sendSuggestion(this)">
+          <span class="s-icon">🩸</span>
+          What is diabetes and how is it diagnosed?
+        </button>
+        <button class="suggestion-card" onclick="sendSuggestion(this)">
+          <span class="s-icon">❤️</span>
+          What are early signs of a heart attack?
+        </button>
+        <button class="suggestion-card" onclick="sendSuggestion(this)">
+          <span class="s-icon">💊</span>
+          What are common side effects of ibuprofen?
+        </button>
+        <button class="suggestion-card" onclick="sendSuggestion(this)">
+          <span class="s-icon">🧠</span>
+          What causes migraine headaches?
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INPUT -->
+  <div class="input-area">
+    <div class="input-box">
+      <textarea
+        id="userInput"
+        rows="1"
+        placeholder="Ask a medical question…"
+        oninput="autoResize(this); updateCharCount()"
+        onkeydown="handleKeyDown(event)"
+      ></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">↑</button>
+    </div>
+    <div class="input-footer">
+      <span class="input-hint">⏎ Send &nbsp;·&nbsp; Shift+⏎ New line</span>
+      <span class="char-count" id="charCount">0 / 1000</span>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  // ── CONFIG ──────────────────────────────────
+  const API_BASE   = "http://localhost:5000";   // Your Flask backend
+  const SESSION_ID = "session-" + Math.random().toString(36).slice(2, 9);
+
+  // ── STATE ────────────────────────────────────
+  let isTyping = false;
+
+  // ── TEXTAREA HELPERS ─────────────────────────
+  function autoResize(el) {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 150) + "px";
+  }
+
+  function updateCharCount() {
+    const n = document.getElementById("userInput").value.length;
+    document.getElementById("charCount").textContent = `${n} / 1000`;
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  }
+
+  // ── SUGGESTION CARDS ─────────────────────────
+  function sendSuggestion(btn) {
+    document.getElementById("userInput").value =
+      btn.innerText.trim().replace(/^[^\w]+/, "");
+    updateCharCount();
+    sendMessage();
+  }
+
+  // ── WELCOME SCREEN ───────────────────────────
+  function hideWelcome() {
+    const w = document.getElementById("welcomeScreen");
+    if (w) w.style.display = "none";
+  }
+
+  // ── APPEND BUBBLE ────────────────────────────
+  function appendMessage(role, content, sources) {
+    hideWelcome();
+    const area = document.getElementById("messagesArea");
+    const row  = document.createElement("div");
+    row.className = `message-row ${role}`;
+
+    const now         = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const avatarHTML  = role === "ai" ? "🩺" : "You";
+    const avatarClass = role === "ai" ? "avatar-ai" : "avatar-user";
+    const bubbleClass = role === "ai" ? "bubble-ai" : "bubble-user";
+
+    let sourcesHTML = "";
+    if (sources && sources.length) {
+      sourcesHTML =
+        `<div class="sources">` +
+        sources.map(s => `<span class="source-chip">📄 ${s}</span>`).join("") +
+        `</div>`;
+    }
+
+    row.innerHTML = `
+      <div class="avatar ${avatarClass}">${avatarHTML}</div>
+      <div class="bubble-wrap">
+        <div class="bubble ${bubbleClass}">${formatContent(content)}${sourcesHTML}</div>
+        <div class="bubble-meta">${now}</div>
+      </div>`;
+
+    area.appendChild(row);
+    area.scrollTop = area.scrollHeight;
+  }
+
+  // ── MARKDOWN-LITE ─────────────────────────────
+  function formatContent(text) {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.*?)\*/g,     "<em>$1</em>")
+      .replace(/\n\n/g, "<br><br>")
+      .replace(/\n/g,   "<br>");
+  }
+
+  // ── TYPING INDICATOR ─────────────────────────
+  function showTyping() {
+    hideWelcome();
+    const area = document.getElementById("messagesArea");
+    const row  = document.createElement("div");
+    row.id        = "typingIndicator";
+    row.className = "message-row ai";
+    row.innerHTML = `
+      <div class="avatar avatar-ai">🩺</div>
+      <div class="typing-indicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>`;
+    area.appendChild(row);
+    area.scrollTop = area.scrollHeight;
+  }
+
+  function hideTyping() {
+    const t = document.getElementById("typingIndicator");
+    if (t) t.remove();
+  }
+
+  // ── SEND MESSAGE ─────────────────────────────
+  async function sendMessage() {
+    if (isTyping) return;
+
+    const input = document.getElementById("userInput");
+    const text  = input.value.trim();
+    if (!text || text.length > 1000) return;
+
+    input.value = "";
+    input.style.height = "auto";
+    updateCharCount();
+
+    appendMessage("user", text);
+
+    isTyping = true;
+    document.getElementById("sendBtn").disabled = true;
+    showTyping();
+
+    try {
+      const res = await fetch(`${API_BASE}/chat`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ message: text, session_id: SESSION_ID })
+      });
+
+      const data = await res.json();
+      hideTyping();
+
+      if (data.error) {
+        appendMessage("ai", `⚠ Error: ${data.error}`);
+      } else {
+        appendMessage("ai", data.answer, data.sources);
+      }
+
+    } catch (err) {
+      hideTyping();
+      appendMessage("ai", "⚠ Could not reach the backend. Make sure Flask is running on port 5000.");
+      console.error(err);
+    } finally {
+      isTyping = false;
+      document.getElementById("sendBtn").disabled = false;
+      document.getElementById("userInput").focus();
+    }
+  }
+
+  // ── INIT ──────────────────────────────────────
+  document.getElementById("userInput").focus();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,9 @@
+from langchain_openai import ChatOpenAI
+from src.config import *
+
+llm = ChatOpenAI(
+    model=MODEL_NAME,
+    base_url="https://integrate.api.nvidia.com/v1",
+    api_key=NVIDIA_NIM,
+    temperature=0.2
+)
