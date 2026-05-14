@@ -8,7 +8,7 @@ A production-ready Retrieval-Augmented Generation (RAG) medical chatbot powered 
 
 | Welcome Screen | Chat in Action |
 |---|---|
-| ![Welcome](static/screenshots/welcome.png) | ![Chat](static/screenshots/chat.png) |
+| ![Welcome](welcome.png) | ![Chat](chat.png) |
 
 ---
 
