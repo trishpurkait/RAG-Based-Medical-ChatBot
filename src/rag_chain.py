@@ -1,11 +1,23 @@
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from src.llm import llm
-from src.prompt import prompt
-from src.retriever import retriever
+try:
+    from src.llm import llm
+    from src.prompt import prompt
 
 
+    def generate_answer(question, docs):
 
-question_answering_chain = create_stuff_documents_chain(llm=llm, prompt=prompt)
+        context = "\n\n".join([
+            doc.page_content
+            for doc in docs
+        ])
 
-qa_chain = create_retrieval_chain(retriever, question_answering_chain)
+        chain = prompt | llm
+
+        response = chain.invoke({
+            "context": context,
+            "input": question
+        })
+
+        return response.content
+    
+except Exception as e:
+    print("Error initializing answer generation:", e)

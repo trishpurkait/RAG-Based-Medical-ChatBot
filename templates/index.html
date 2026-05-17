@@ -97,7 +97,7 @@
 
 <script>
   // ── CONFIG ──────────────────────────────────
-  const API_BASE   = "http://localhost:5000";   // Your Flask backend
+  const API_BASE = "";  // Your Flask backend
   const SESSION_ID = "session-" + Math.random().toString(36).slice(2, 9);
 
   // ── STATE ────────────────────────────────────
@@ -214,7 +214,7 @@
     showTyping();
 
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
+      const res = await fetch(`/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ message: text, session_id: SESSION_ID })

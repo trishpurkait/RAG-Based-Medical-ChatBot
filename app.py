@@ -1,13 +1,11 @@
 from flask import Flask,request,render_template ,jsonify
-
-from src.rag_chain import qa_chain
-from src.question_chain import question_chain
 from src.memory import (
     get_history,
-    format_history,
     update_history,
     chat_sessions
 )
+from src.retriever import hybrid_retrieve
+from src.rag_chain import generate_answer
 
 
 app = Flask(__name__)
@@ -35,18 +33,17 @@ def chat():
 
         history = get_history(session_id)
 
-        response = qa_chain.invoke({
-            "input": question_chain.invoke({"input": question, "chat_history": format_history(history)}).content
-        })
+        docs = hybrid_retrieve(question, history)
+        print ("docs retrieved:", len(docs))
+        answer = generate_answer(question, docs)
+        print("Generated answer:", answer)
+        update_history(session_id, question, answer)
 
-        answer = response["answer"]
 
         sources = list({
             doc.metadata.get("source", "Medical Knowledge Base")
-            for doc in response.get("context", [])
+            for doc in docs
         })
-
-        update_history(session_id, question, answer)
 
         return jsonify({"answer": answer, "sources": sources})
     
@@ -64,7 +61,6 @@ def clear_history():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-
+    app.run(debug=True)
 
 
