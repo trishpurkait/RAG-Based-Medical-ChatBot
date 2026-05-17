@@ -1,6 +1,17 @@
-# 🩺 MediQuery — RAG-Based Medical Chatbot
+# 🩺 MediQuery — Production-Style Conversational Medical RAG Chatbot
 
-A production-ready Retrieval-Augmented Generation (RAG) medical chatbot powered by **Pinecone**, **LLaMA 3.1 70B** (via NVIDIA NIM), and **LangChain**, served through a **Flask** backend with a clean, responsive web UI.
+<div align="center">
+
+![Python](https://img.shields.io/badge/Python-3.11-blue?style=flat-square&logo=python)
+![Flask](https://img.shields.io/badge/Flask-3.0.3-black?style=flat-square&logo=flask)
+![LangChain](https://img.shields.io/badge/LangChain-0.2.16-green?style=flat-square)
+![Pinecone](https://img.shields.io/badge/Pinecone-Vector_DB-purple?style=flat-square)
+![NVIDIA NIM](https://img.shields.io/badge/NVIDIA_NIM-LLaMA_3.1_70B-76B900?style=flat-square&logo=nvidia)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
+
+**A production-grade conversational RAG chatbot for medical Q&A — featuring hybrid retrieval (Dense + BM25), cross-encoder reranking, session-based memory, and a single-LLM-call optimised pipeline.**
+
+</div>
 
 ---
 
@@ -12,15 +23,159 @@ A production-ready Retrieval-Augmented Generation (RAG) medical chatbot powered 
 
 ---
 
-## ✨ Features
+## 📌 Project Overview
 
-- 🔍 **RAG Pipeline** — Retrieves relevant chunks from a Pinecone vector database before answering, grounding every response in your medical documents
-- 🧠 **Question Rewriting** — Rewrites follow-up questions to be self-contained using chat history, so context is never lost
-- 💬 **Conversation Memory** — Maintains per-session chat history (last 5 turns) without a database
-- 📄 **Source Citations** — Every answer shows which PDF file the information was retrieved from
-- ⚡ **LLaMA 3.1 70B** — State-of-the-art open-source LLM served via NVIDIA NIM API
-- 🌐 **Flask Web App** — Serves the frontend as a Jinja2 template; no separate frontend server needed
-- 📱 **Responsive UI** — Works on desktop and mobile
+MediQuery is an end-to-end conversational Retrieval-Augmented Generation (RAG) system built for the medical domain. It goes significantly beyond basic RAG by implementing a **hybrid retrieval architecture**, a **cross-encoder reranking layer**, **session-based conversational memory**, and an **optimised single-LLM-call pipeline** — engineering decisions that together reduce hallucinations, improve retrieval quality, and enable coherent multi-turn dialogue.
+
+This project is designed as a production-ready GenAI portfolio showcase demonstrating advanced RAG engineering patterns used in real-world AI systems.
+
+---
+
+## ⚡ Basic RAG vs. Production RAG — What Changed
+
+| Capability | Basic RAG | MediQuery (Production RAG) |
+|---|---|---|
+| Retrieval | Dense vector search only | **Hybrid: Dense (k=8) + BM25 (k=5)** |
+| Reranking | None | **Cross-encoder reranker (top\_k=3)** |
+| Conversation | Single-turn, stateless | **Multi-turn with session memory** |
+| Context injection | None | **Last 3 turns injected into query** |
+| LLM calls per query | 2 (rewrite + answer) | **1 (answer only)** |
+| Query rewriting | Extra LLM call | **Removed — context injected directly** |
+| Hallucination risk | Higher | **Lower — reranked, grounded context** |
+| Keyword matching | Weak | **Strong — BM25 handles exact terms** |
+| Error resilience | None | **try/except on every module** |
+| Source attribution | Basic | **Per-chunk metadata from Pinecone** |
+
+---
+
+## 🏗️ System Architecture
+
+### Full Retrieval & Answer Pipeline
+
+```
+User Question  +  Session ID
+        │
+        ▼
+┌──────────────────────────────────┐
+│       Memory: get_history()      │  ← fetches last MAX_HISTORY=5 turns
+│       format_history() → str     │    formats last 3 turns as context string
+└──────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│             hybrid_retrieve(question, history)           │
+│                                                          │
+│  1. Build augmented_query:                               │
+│     "Conversation: {history}\nCurrent Question: {q}"    │
+│                                                          │
+│  2. Dense Retrieval  ──────────────────────────────────► │
+│     Pinecone similarity_search(augmented_query, k=8)     │
+│                                                          │
+│  3. BM25 Sparse Retrieval  ────────────────────────────► │
+│     BM25Retriever.from_documents(dense_docs)             │
+│     bm25.invoke(question)  →  k=5 docs                  │
+│                                                          │
+│  4. Merge + Deduplicate                                  │
+│     dense_docs + sparse_docs → unique_docs (by content)  │
+│                                                          │
+│  5. rerank_documents(question, unique_docs, top_k=3)     │
+│     CrossEncoder scores (query, chunk) pairs             │
+│     Sorted by descending relevance score                 │
+│     Returns top 3 most relevant chunks                   │
+└──────────────────────────────────────────────────────────┘
+        │
+        ▼  final_docs (3 reranked chunks)
+┌──────────────────────────────────┐
+│       generate_answer()          │
+│                                  │
+│  context = join(doc.page_content)│
+│  chain = prompt | llm            │
+│  chain.invoke({context, input})  │  ← single LLM call
+└──────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────┐
+│   update_history(session, q, a)  │  ← stores turn, trims to MAX_HISTORY=5
+└──────────────────────────────────┘
+        │
+        ▼
+  JSON → { answer, sources }  →  Browser UI
+```
+
+### Memory Flow
+
+```
+Session ID
+    │
+    ▼
+chat_sessions[session_id]  →  [ {user, assistant}, ... ]
+                                        │
+                          format_history() → last 3 turns as string
+                                        │
+                          injected into augmented_query for retrieval
+                          (no extra LLM call — pure string injection)
+                                        │
+                          update_history() → append + trim to 5 turns
+```
+
+---
+
+## 🔬 Key Engineering Decisions
+
+### 1. Hybrid Retrieval: Dense + BM25
+
+Pure dense retrieval struggles with **exact medical terminology** — drug names, dosage values, diagnostic codes. BM25 sparse retrieval handles these precisely.
+
+The pipeline:
+- **Dense (Pinecone, k=8):** MiniLM-L6-v2 embeddings (384-dim) capture semantic meaning. "Heart attack" matches "myocardial infarction".
+- **BM25 (k=5):** Built dynamically from the dense results using `BM25Retriever.from_documents()`. Handles exact keyword frequency — "metformin 500mg" returns exact matches.
+- **Merge + Deduplicate:** Results from both are combined and deduplicated by `page_content` string comparison, ensuring no repeated chunks reach the reranker.
+
+This maximises **recall** (more candidates) while the reranker maximises **precision** (best 3 survive).
+
+### 2. Cross-Encoder Reranking
+
+Model: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+
+Unlike bi-encoders (which score query and document independently), a cross-encoder processes `(query, chunk)` pairs **jointly**, producing true semantic relevance scores. The reranker:
+
+1. Builds pairs: `[[query, chunk.page_content], ...]`
+2. Runs `reranker.predict(pairs)` → relevance scores
+3. Sorts descending, returns `top_k=3`
+
+**Effect:** Irrelevant chunks retrieved by keyword overlap or semantic approximation are filtered out before reaching the LLM. This directly reduces hallucination and improves answer grounding.
+
+### 3. Single LLM Call — No Query Rewriting
+
+The original pipeline used a separate LLM call to rewrite follow-up questions (`question_chain = rewrite_prompt | llm`), which added latency and API cost.
+
+The updated pipeline **eliminates this** by injecting conversation history directly into the retrieval query as a string:
+
+```python
+augmented_query = f"""
+Conversation:
+{history_text}
+
+Current Question:
+{question}
+"""
+dense_docs = search.similarity_search(augmented_query, k=8)
+```
+
+Pinecone's similarity search handles the context-aware retrieval without any extra LLM call. The LLM is called **once**, only for final answer generation.
+
+### 4. Conversation-Aware Memory
+
+`memory.py` maintains a per-session sliding window:
+- `get_history(session_id)` — returns session history, initialises if new
+- `format_history(history)` — formats **last 3 turns** as a plain string for query augmentation
+- `update_history(session_id, q, a)` — appends new turn, trims to `MAX_HISTORY=5`
+
+This keeps the context window small and focused — 3 turns for retrieval, 5 turns stored — balancing coherence with token efficiency.
+
+### 5. Error Resilience
+
+Every `src/` module is wrapped in a `try/except` block. If any module fails to initialise (missing API key, model unavailable, network issue), it prints a diagnostic message instead of crashing the entire app. Flask continues to handle other requests gracefully.
 
 ---
 
@@ -29,7 +184,7 @@ A production-ready Retrieval-Augmented Generation (RAG) medical chatbot powered 
 ```
 RAG-BASED-MEDICAL-CHATBOT/
 │
-├── Data/                        # Your medical PDF files go here
+├── Data/                        # Medical PDF files (not pushed to GitHub)
 │   └── medicine-book.pdf
 │
 ├── Experiment/
@@ -37,14 +192,15 @@ RAG-BASED-MEDICAL-CHATBOT/
 │
 ├── src/                         # Core application modules
 │   ├── __init__.py
-│   ├── config.py                # API keys, model name, constants
-│   ├── loader.py                # PDF loading, chunking, embeddings
-│   ├── retriever.py             # Pinecone vector store + retriever
-│   ├── llm.py                   # NVIDIA NIM LLM setup
-│   ├── prompt.py                # System prompt + rewrite prompt
-│   ├── question_chain.py        # Question rewriting chain
-│   ├── rag_chain.py             # Full RAG chain (retriever + LLM)
-│   └── memory.py                # Per-session chat history
+│   ├── config.py                # API keys, model name, MAX_HISTORY, index_name
+│   ├── loader.py                # PDF loading, chunking, embeddings download
+│   ├── retriever.py             # hybrid_retrieve(): Dense + BM25 + dedup + rerank
+│   ├── reranker.py              # CrossEncoder reranker, rerank_documents()
+│   ├── rag_chain.py             # generate_answer(): context builder + LLM call
+│   ├── llm.py                   # NVIDIA NIM LLM (LLaMA 3.1 70B)
+│   ├── prompt.py                # System prompt template (ChatPromptTemplate)
+│   ├── question_chain.py        # Legacy rewrite chain (retained, unused in v2)
+│   └── memory.py                # Session chat history management
 │
 ├── static/
 │   └── style.css                # Frontend styles
@@ -52,38 +208,50 @@ RAG-BASED-MEDICAL-CHATBOT/
 ├── templates/
 │   └── index.html               # Chat UI (Jinja2 template)
 │
-├── app.py                       # Flask app — routes: /, /chat, /clear
-├── store_vectors.py             # One-time script: embed PDFs → Pinecone
+├── app.py                       # Flask app — /, /chat, /clear
+├── store_vectors.py             # One-time indexing script
+├── render.yaml                  # Render deployment blueprint
+├── Procfile                     # Gunicorn start command
+├── runtime.txt                  # Python 3.11.0
 ├── setup.py                     # Package setup
 ├── requirements.txt
-└── .env                         # API keys (never commit this)
+└── .env                         # API keys (never commit)
 ```
 
 ---
 
-## ⚙️ How It Works
+## 🧩 Module Reference
 
-```
-User Question
-     │
-     ▼
-Question Rewriting Chain          ← rewrites question using chat history
-     │                               so follow-ups are self-contained
-     ▼
-Pinecone Retriever                ← finds top-3 similar chunks (cosine similarity)
-     │                               using all-MiniLM-L6-v2 embeddings (dim=384)
-     ▼
-Stuff Documents Chain             ← injects retrieved chunks into the prompt
-     │
-     ▼
-LLaMA 3.1 70B (NVIDIA NIM)       ← generates the final answer
-     │
-     ▼
-Flask → JSON response             ← { answer, sources }
-     │
-     ▼
-Browser UI                        ← renders answer + source chips
-```
+| Module | Role | Key Detail |
+|---|---|---|
+| `config.py` | Loads `.env`, exports constants | `MAX_HISTORY=5`, `index_name="medical-chatbot"`, wrapped in try/except |
+| `loader.py` | PDF ingestion | `DirectoryLoader` + `PyPDFLoader`; chunk size 500, overlap 50 |
+| `retriever.py` | **Hybrid retrieval** | Dense k=8 → BM25 k=5 → merge/dedup → rerank top\_k=3 |
+| `reranker.py` | Cross-encoder reranking | `ms-marco-MiniLM-L-6-v2`; scores pairs, sorts descending |
+| `rag_chain.py` | Answer generation | Builds context string from docs; `prompt \| llm` single call |
+| `llm.py` | LLM client | `ChatOpenAI` → NVIDIA NIM base URL, `temperature=0.2` |
+| `prompt.py` | Prompt template | System prompt with `{context}` + `{input}`; no hallucination instruction |
+| `memory.py` | Session memory | Sliding window; format uses last 3, stores last 5 |
+| `question_chain.py` | Legacy (v1) | Rewrite chain — retained but not called in current pipeline |
+| `app.py` | Flask routes | Calls `hybrid_retrieve()` then `generate_answer()` per request |
+| `store_vectors.py` | One-time setup | Creates Pinecone index (dim=384, cosine, AWS us-east-1) |
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| **LLM** | LLaMA 3.1 70B (NVIDIA NIM) | Answer generation |
+| **Embeddings** | `all-MiniLM-L6-v2` (384-dim) | Dense vector encoding |
+| **Vector DB** | Pinecone Serverless | Dense retrieval (k=8) |
+| **Sparse Retrieval** | BM25 (LangChain) | Exact keyword matching (k=5) |
+| **Reranker** | `ms-marco-MiniLM-L-6-v2` | Cross-encoder relevance scoring |
+| **RAG Framework** | LangChain 0.2 | Chain composition, loaders, splitters |
+| **Backend** | Flask 3.0 + Gunicorn | HTTP server, Jinja2 templates |
+| **Frontend** | Vanilla HTML/CSS | DM Sans + DM Serif Display UI |
+| **PDF Parsing** | PyPDF via LangChain | Document loading and chunking |
+| **Memory** | In-process Python dict | Session-scoped sliding window |
 
 ---
 
@@ -92,8 +260,8 @@ Browser UI                        ← renders answer + source chips
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/rag-medical-chatbot.git
-cd rag-medical-chatbot
+git clone https://github.com/trishpurkait/RAG-Based-Medical-ChatBot.git
+cd RAG-Based-Medical-ChatBot
 ```
 
 ### 2. Create and activate a virtual environment
@@ -130,32 +298,26 @@ NVIDIA_NIM=your-nvidia-nim-api-key-here
 
 ### 5. Add your medical PDFs
 
-Place your PDF files inside the `Data/` folder:
-
 ```
 Data/
-├── medicine-book.pdf
-├── drug-reference.pdf
-└── who-guidelines.pdf
+└── medicine-book.pdf      ← place your PDFs here
 ```
 
-### 6. Embed documents into Pinecone (run once)
-
-This script reads all PDFs in `Data/`, chunks them, embeds them, and uploads to Pinecone:
+### 6. Index documents into Pinecone (run once)
 
 ```bash
 python store_vectors.py
 ```
 
-> ⚠️ Only run this once (or whenever you add new documents). It creates a Pinecone index named `medical-chatbot` with dimension `384` and cosine metric on AWS `us-east-1`.
+This creates a Pinecone index named `medical-chatbot` (dim=384, cosine, AWS us-east-1) and upserts all PDF chunks. Only run again if you add new documents.
 
-### 7. Start the Flask server
+### 7. Start the app
 
 ```bash
 python app.py
 ```
 
-Open your browser at **http://localhost:5000**
+Open **http://localhost:5000**
 
 ---
 
@@ -163,149 +325,96 @@ Open your browser at **http://localhost:5000**
 
 ### `POST /chat`
 
-Send a user message and get an AI answer.
-
-**Request body:**
 ```json
-{
-  "message": "What is diabetes?",
-  "session_id": "user-abc123"
-}
-```
+// Request
+{ "message": "What is diabetes?", "session_id": "user-abc123" }
 
-**Response:**
-```json
-{
-  "answer": "Diabetes is a chronic condition...",
-  "sources": ["Data\\medicine-book.pdf"]
-}
+// Response
+{ "answer": "Diabetes is a chronic condition...", "sources": ["Data\\medicine-book.pdf"] }
 ```
-
----
 
 ### `POST /clear`
 
-Clear the conversation history for a session.
-
-**Request body:**
 ```json
-{
-  "session_id": "user-abc123"
-}
-```
+// Request
+{ "session_id": "user-abc123" }
 
-**Response:**
-```json
-{
-  "status": "History cleared"
-}
+// Response
+{ "status": "History cleared" }
 ```
-
----
 
 ### `GET /`
 
-Serves the chat UI (`templates/index.html`).
+Serves the chat UI.
 
 ---
 
-## 🧩 Module Reference
+## ☁️ Render Deployment
 
-| File | Purpose |
+```bash
+# Push deployment files
+git add render.yaml Procfile runtime.txt requirements.txt app.py
+git commit -m "render deployment config"
+git push
+```
+
+On [render.com](https://render.com): **New → Web Service → connect repo**
+
+| Setting | Value |
 |---|---|
-| `src/config.py` | Loads `.env`, exports `PINECONE_API_KEY`, `NVIDIA_NIM`, `MODEL_NAME`, `MAX_HISTORY`, `index_name` |
-| `src/loader.py` | `load_files()` — loads PDFs via `DirectoryLoader`; `spilt_text()` — chunks with `RecursiveCharacterTextSplitter` (500 chars, 50 overlap); `download_embeddings()` — loads `all-MiniLM-L6-v2` |
-| `src/retriever.py` | Connects to the existing Pinecone index, returns a similarity retriever (`k=3`) |
-| `src/llm.py` | Instantiates `ChatOpenAI` pointed at NVIDIA NIM base URL with LLaMA 3.1 70B |
-| `src/prompt.py` | Defines `prompt` (RAG answer) and `rewrite_prompt` (question rewriting) |
-| `src/question_chain.py` | `rewrite_prompt \| llm` — rewrites ambiguous questions using chat history |
-| `src/rag_chain.py` | Combines retriever + LLM into a full `RetrievalQA` chain |
-| `src/memory.py` | In-memory `chat_sessions` dict; `get_history`, `update_history`, `format_history` helpers |
-| `store_vectors.py` | One-time indexing script — creates Pinecone index and upserts embedded chunks |
-| `app.py` | Flask routes: `/` (UI), `/chat` (RAG answer), `/clear` (reset session) |
+| Build Command | `pip install -r requirements.txt && pip install -e .` |
+| Start Command | `gunicorn app:app --workers 2 --timeout 120` |
+| Python Version | `3.11.0` |
 
----
+Add environment variables in the Render dashboard:
 
-## 🛠️ Tech Stack
-
-| Layer | Technology |
+| Key | Value |
 |---|---|
-| **LLM** | LLaMA 3.1 70B Instruct (NVIDIA NIM) |
-| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
-| **Vector DB** | Pinecone (Serverless, AWS us-east-1, cosine metric) |
-| **RAG Framework** | LangChain 0.2 |
-| **Backend** | Flask 3.0 |
-| **Frontend** | Vanilla HTML + CSS (DM Sans + DM Serif Display) |
-| **PDF Parsing** | PyPDF via LangChain `PyPDFLoader` |
+| `PINECONE_API_KEY` | your key |
+| `NVIDIA_NIM` | your key |
+
+> `Data/` PDFs are in `.gitignore` — the app connects to your pre-populated Pinecone index on startup.
 
 ---
 
-## 🔧 Configuration
+## 🔧 Configuration Reference
 
-All tuneable constants live in `src/config.py`:
-
-```python
-MODEL_NAME  = "meta/llama-3.1-70b-instruct"   # LLM model
-MAX_HISTORY = 5                                 # Turns of memory per session
-index_name  = "medical-chatbot"                # Pinecone index name
-```
-
-Chunking settings are in `src/loader.py`:
-
-```python
-chunk_size    = 500   # Characters per chunk
-chunk_overlap = 50    # Overlap between chunks
-```
-
-Retriever settings are in `src/retriever.py`:
-
-```python
-search_type   = "similarity"
-k             = 3     # Number of chunks retrieved per query
-```
+| Parameter | Location | Value | Effect |
+|---|---|---|---|
+| `MAX_HISTORY` | `config.py` | `5` | Max turns stored per session |
+| `format_history` window | `memory.py` | `[-3:]` | Last 3 turns used for query augmentation |
+| Dense retrieval k | `retriever.py` | `8` | Pinecone candidates |
+| BM25 k | `retriever.py` | `5` | Sparse candidates |
+| Reranker top\_k | `reranker.py` | `3` | Final chunks passed to LLM |
+| Chunk size | `loader.py` | `500` | Characters per chunk |
+| Chunk overlap | `loader.py` | `50` | Overlap between chunks |
+| LLM temperature | `llm.py` | `0.2` | Low = factual, consistent answers |
 
 ---
 
-## ➕ Adding New Documents to the Database
+## 🔮 Future Improvements
 
-To add new PDFs to the existing Pinecone index **without re-creating it**:
-
-1. Copy your new PDFs into `Data/`
-2. Modify `store_vectors.py` — replace `pc.create_index(...)` with a connection to the existing index:
-
-```python
-# Instead of pc.create_index(...), use:
-index = pc.Index(index_name)
-
-# Then upsert new documents:
-PineconeVectorStore.from_documents(chunks, embeddings, index_name=index_name)
-```
-
-Or simply add a new script `add_data.py`:
-
-```python
-from src.loader import load_files, spilt_text, download_embeddings
-from langchain_pinecone import PineconeVectorStore
-from src.config import index_name
-import os
-
-# Load only new files
-new_docs  = load_files("Data/new/")          # Put new PDFs in Data/new/
-chunks    = spilt_text(new_docs)
-embeddings = download_embeddings()
-
-PineconeVectorStore.from_documents(chunks, embeddings, index_name=index_name)
-print(f"Added {len(chunks)} chunks to Pinecone index '{index_name}'")
-```
+| Feature | Description |
+|---|---|
+| **Streaming responses** | Stream LLM tokens to UI using `stream=True` + Server-Sent Events |
+| **Redis memory** | Replace in-process `chat_sessions` dict with Redis for persistent, scalable sessions |
+| **RAG evaluation** | Integrate RAGAS framework to measure faithfulness, answer relevance, and context recall |
+| **Hallucination detection** | Add a post-generation verification layer using NLI models |
+| **Observability & tracing** | LangSmith or Arize Phoenix integration for retrieval and generation tracing |
+| **Docker deployment** | Containerise with `Dockerfile` + `docker-compose.yml` for portable deployment |
+| **Authentication** | Session-based auth or API key middleware to protect the `/chat` endpoint |
+| **Re-indexing API** | `POST /ingest` endpoint to add new PDFs without restarting the server |
+| **Evaluation dashboard** | Admin panel showing retrieval hit rates, latency, and source usage stats |
 
 ---
 
 ## ⚠️ Important Notes
 
-- **This is not a substitute for professional medical advice.** The chatbot is for informational purposes only.
-- The LLM is instructed to answer **only from retrieved documents**. If the answer is not in your PDFs, it will say so.
-- Chat history is stored **in memory** — it resets when Flask restarts. For persistence, replace `chat_sessions` dict in `memory.py` with Redis or a database.
-- Never commit your `.env` file. Add it to `.gitignore`.
+- **Not a substitute for professional medical advice.** MediQuery is for informational purposes only.
+- The LLM is instructed to answer **only from retrieved documents**. If the answer isn't in the indexed PDFs, it says so.
+- Chat history is **in-memory** — resets on Flask restart. Use Redis for persistence.
+- Never commit `.env`. It is blocked by `.gitignore`.
+- `question_chain.py` is retained for reference but is **not called** in the current pipeline.
 
 ---
 
@@ -317,4 +426,4 @@ MIT License — see `LICENSE` for details.
 
 ## 👤 Author
 
-**TRISH** · trishpurkat@gmail.com
+**TRISH** · [github.com/trishpurkait](https://github.com/trishpurkait) · trishpurkat@gmail.com
