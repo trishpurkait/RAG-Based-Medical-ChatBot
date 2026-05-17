@@ -210,9 +210,6 @@ RAG-BASED-MEDICAL-CHATBOT/
 │
 ├── app.py                       # Flask app — /, /chat, /clear
 ├── store_vectors.py             # One-time indexing script
-├── render.yaml                  # Render deployment blueprint
-├── Procfile                     # Gunicorn start command
-├── runtime.txt                  # Python 3.11.0
 ├── setup.py                     # Package setup
 ├── requirements.txt
 └── .env                         # API keys (never commit)
